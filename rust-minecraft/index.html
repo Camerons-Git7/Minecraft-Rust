@@ -1,23 +1,132 @@
+
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Horizon</title>
+<title>Minecraft</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico"/>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  body > canvas { display: block; width: 100vw !important; height: 100vh !important; outline: none; }
-  #status {
-    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: #ddd; font: 16px/1.5 system-ui, sans-serif; text-align: center; padding: 16px;
-    pointer-events: none; white-space: pre-line;
-  }
-  #status:empty { display: none; }
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+body>canvas{display:block;width:100vw!important;height:100vh!important;outline:none}
+#status{
+position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+color:#ddd;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:16px;
+pointer-events:none;white-space:pre-line
+}
+#status:empty{display:none}
 </style>
 </head>
 <body>
 <div id="status">Starting…</div>
+
+<script>
+(function(){
+const DB_NAME="horizon-asset-cache";
+const STORE="files";
+const DB_VERSION=1;
+
+function openDB(){
+return new Promise(function(resolve,reject){
+const req=indexedDB.open(DB_NAME,DB_VERSION);
+req.onupgradeneeded=function(){
+const db=req.result;
+if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE);
+};
+req.onsuccess=function(){resolve(req.result)};
+req.onerror=function(){reject(req.error)};
+});
+}
+
+async function idbGet(key){
+try{
+const db=await openDB();
+return await new Promise(function(resolve,reject){
+const tx=db.transaction(STORE,"readonly");
+const req=tx.objectStore(STORE).get(key);
+req.onsuccess=function(){resolve(req.result||null)};
+req.onerror=function(){reject(req.error)};
+});
+}catch(e){
+return null;
+}
+}
+
+async function idbPut(key,value){
+try{
+const db=await openDB();
+await new Promise(function(resolve,reject){
+const tx=db.transaction(STORE,"readwrite");
+tx.objectStore(STORE).put(value,key);
+tx.oncomplete=function(){resolve()};
+tx.onerror=function(){reject(tx.error)};
+});
+}catch(e){}
+}
+
+function shouldCache(url){
+if(!url||typeof url!=="string")return false;
+try{
+const parsed=new URL(url,location.href);
+if(parsed.origin!==location.origin)return false;
+url=parsed.href;
+}catch(e){
+return false;
+}
+return /\.(wasm|tar\.gz|tgz|gz|bin|pak|pack|dat|obb)(\?|$)/i.test(url)||
+/horizon-client_bg\.wasm(\?|$)/i.test(url);
+}
+
+const originalFetch=window.fetch.bind(window);
+
+window.fetch=async function(input,init){
+const url=typeof input==="string"?input:(input&&input.url)||"";
+let finalUrl;
+
+try{
+finalUrl=new URL(url,location.href).href;
+}catch(e){
+return originalFetch(input,init);
+}
+
+const method=(init&&init.method)||(input&&input.method)||"GET";
+
+if(method.toUpperCase()!=="GET"||!shouldCache(finalUrl)){
+return originalFetch(input,init);
+}
+
+const cached=await idbGet(finalUrl);
+
+if(cached&&cached.buffer){
+return new Response(cached.buffer.slice(0),{
+status:cached.status||200,
+statusText:cached.statusText||"OK",
+headers:cached.contentType?{"Content-Type":cached.contentType}:undefined
+});
+}
+
+const response=await originalFetch(input,init);
+
+if(response.ok){
+try{
+const clone=response.clone();
+const buffer=await clone.arrayBuffer();
+idbPut(finalUrl,{
+buffer:buffer,
+status:response.status,
+statusText:response.statusText,
+contentType:response.headers.get("Content-Type")||""
+});
+}catch(e){}
+}
+
+return response;
+};
+})();
+</script>
+
 <script type="module" src="main.js"></script>
+
 <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"f0d9b65e886648c4a2c547a016fe67d4","r":1,"spa":2}' crossorigin="anonymous"></script>
 </body>
 </html>
